@@ -1,0 +1,930 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Element ML Intelligence Agent</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0f172a;
+    color: #e2e8f0;
+    height: 100vh;
+    display: flex;
+    overflow: hidden;
+  }
+
+  /* ── Auth Modal ──────────────────────────────── */
+  #auth-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.85);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 100;
+  }
+  #auth-overlay.hidden { display: none; }
+
+  .auth-card {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 16px;
+    padding: 40px;
+    width: 480px;
+    max-width: 95vw;
+  }
+  .auth-card .logo {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+  }
+  .auth-card .logo span {
+    font-size: 22px; font-weight: 700; color: #f8fafc;
+  }
+  .auth-card p {
+    color: #94a3b8; font-size: 14px; margin-bottom: 28px; line-height: 1.5;
+  }
+  .auth-card label {
+    display: block; font-size: 13px; font-weight: 600;
+    color: #cbd5e1; margin-bottom: 6px;
+  }
+  .auth-card input, .auth-card textarea {
+    width: 100%;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    padding: 10px 14px;
+    color: #e2e8f0;
+    font-size: 13px;
+    font-family: 'Monaco', 'Menlo', monospace;
+    outline: none;
+    margin-bottom: 18px;
+    transition: border-color 0.2s;
+  }
+  .auth-card input:focus, .auth-card textarea:focus {
+    border-color: #3b82f6;
+  }
+  .auth-card textarea { height: 90px; resize: vertical; }
+  .auth-hint {
+    font-size: 12px; color: #64748b; margin-top: -12px; margin-bottom: 18px;
+  }
+  .btn-connect {
+    width: 100%;
+    background: #3b82f6;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 12px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .btn-connect:hover { background: #2563eb; }
+
+  .btn-signout {
+    width: 100%;
+    background: transparent;
+    border: 1px solid #475569;
+    color: #94a3b8;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-bottom: 20px;
+    text-align: center;
+  }
+  .btn-signout:hover { border-color: #ef4444; color: #ef4444; }
+
+  /* ── App Layout ──────────────────────────────── */
+  #app {
+    display: flex;
+    width: 100%;
+    height: 100vh;
+  }
+
+  /* ── Sidebar ─────────────────────────────────── */
+  aside {
+    width: 260px;
+    background: #1e293b;
+    border-right: 1px solid #334155;
+    display: flex;
+    flex-direction: column;
+    padding: 24px 20px;
+    flex-shrink: 0;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 24px;
+  }
+  .brand-icon {
+    width: 36px; height: 36px;
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+  }
+  .brand-name { font-size: 15px; font-weight: 700; color: #f8fafc; }
+
+  .status-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #164e1a; color: #4ade80;
+    font-size: 12px; font-weight: 600;
+    padding: 4px 10px; border-radius: 20px;
+    margin-bottom: 28px;
+  }
+  .status-dot {
+    width: 7px; height: 7px;
+    background: #4ade80;
+    border-radius: 50%;
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .sidebar-section { margin-bottom: 24px; }
+  .sidebar-section h3 {
+    font-size: 11px; font-weight: 700;
+    color: #64748b; text-transform: uppercase; letter-spacing: 0.08em;
+    margin-bottom: 10px;
+  }
+  .capability-item {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 10px; border-radius: 8px;
+    margin-bottom: 6px;
+    background: #0f172a;
+    font-size: 13px; color: #94a3b8;
+    line-height: 1.4;
+  }
+  .capability-item .icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
+
+  .hint-box {
+    background: #172033;
+    border: 1px solid #1e3a5f;
+    border-radius: 8px;
+    padding: 12px;
+    font-size: 12px;
+    color: #64748b;
+    line-height: 1.6;
+    margin-top: auto;
+  }
+  .hint-box strong { color: #94a3b8; }
+
+  /* ── Chat Area ───────────────────────────────── */
+  main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .chat-header {
+    padding: 18px 24px;
+    border-bottom: 1px solid #334155;
+    background: #1e293b;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .chat-header-icon {
+    width: 40px; height: 40px;
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; flex-shrink: 0;
+  }
+  .chat-header-text h2 { font-size: 16px; font-weight: 700; color: #f8fafc; }
+  .chat-header-text p  { font-size: 13px; color: #64748b; margin-top: 2px; }
+
+  .btn-reset {
+    margin-left: auto;
+    background: transparent;
+    border: 1px solid #334155;
+    color: #64748b;
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .btn-reset:hover { border-color: #64748b; color: #94a3b8; }
+
+  #messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    scroll-behavior: smooth;
+  }
+  #messages::-webkit-scrollbar { width: 4px; }
+  #messages::-webkit-scrollbar-track { background: transparent; }
+  #messages::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+
+  .message {
+    display: flex;
+    gap: 12px;
+    max-width: 78%;
+    animation: fadeIn 0.25s ease;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .message.user { align-self: flex-end; flex-direction: row-reverse; }
+  .message.assistant { align-self: flex-start; }
+
+  .avatar {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px; flex-shrink: 0;
+    margin-top: 2px;
+  }
+  .message.assistant .avatar {
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  }
+  .message.user .avatar {
+    background: #334155;
+  }
+
+  .bubble {
+    padding: 12px 16px;
+    border-radius: 16px;
+    font-size: 14px;
+    line-height: 1.65;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .message.assistant .bubble {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-top-left-radius: 4px;
+    color: #e2e8f0;
+  }
+  .message.user .bubble {
+    background: #2563eb;
+    border-top-right-radius: 4px;
+    color: #fff;
+  }
+
+  /* Code blocks in assistant messages */
+  .bubble code {
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-family: 'Monaco', 'Menlo', monospace;
+    font-size: 12px;
+    color: #7dd3fc;
+  }
+
+  /* Typing indicator */
+  .typing-indicator {
+    display: flex; align-items: center; gap: 5px;
+    padding: 14px 18px;
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 16px;
+    border-top-left-radius: 4px;
+    width: fit-content;
+  }
+  .typing-dot {
+    width: 7px; height: 7px;
+    background: #64748b;
+    border-radius: 50%;
+    animation: typing 1.2s infinite;
+  }
+  .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+  .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes typing {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+    30% { transform: translateY(-5px); opacity: 1; }
+  }
+
+  /* ── Input Bar ───────────────────────────────── */
+  .input-bar {
+    padding: 16px 24px;
+    border-top: 1px solid #334155;
+    background: #1e293b;
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+  }
+  #user-input {
+    flex: 1;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 12px 16px;
+    color: #e2e8f0;
+    font-size: 14px;
+    font-family: inherit;
+    outline: none;
+    resize: none;
+    max-height: 120px;
+    min-height: 44px;
+    line-height: 1.5;
+    transition: border-color 0.2s;
+  }
+  #user-input:focus { border-color: #3b82f6; }
+  #user-input::placeholder { color: #475569; }
+  .auth-card input::placeholder,
+  .auth-card textarea::placeholder { color: #475569; }
+
+  #send-btn {
+    background: #3b82f6;
+    border: none;
+    border-radius: 10px;
+    width: 44px; height: 44px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.2s;
+    color: white;
+    font-size: 18px;
+  }
+  #send-btn:hover { background: #2563eb; }
+  #send-btn:disabled { background: #334155; cursor: not-allowed; }
+
+  /* ── Attach button ───────────────────────────── */
+  #attach-btn {
+    background: transparent;
+    border: 1px solid #334155;
+    border-radius: 10px;
+    width: 44px; height: 44px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.2s;
+    color: #64748b;
+    font-size: 18px;
+  }
+  #attach-btn:hover { border-color: #3b82f6; color: #3b82f6; }
+  #attach-btn.active { border-color: #22c55e; color: #22c55e; background: #052e16; }
+
+  /* ── Notebook chip ───────────────────────────── */
+  #nb-chip {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    background: #052e16;
+    border: 1px solid #166534;
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 12px;
+    color: #4ade80;
+    margin: 0 24px 0 24px;
+  }
+  #nb-chip.visible { display: flex; }
+  #nb-chip .chip-name { flex: 1; font-weight: 600; }
+  #nb-chip .chip-meta { color: #16a34a; }
+  #nb-chip .chip-clear {
+    cursor: pointer; color: #4ade80; font-size: 16px;
+    line-height: 1; opacity: 0.7;
+  }
+  #nb-chip .chip-clear:hover { opacity: 1; }
+
+  /* ── Session list ────────────────────────────── */
+  .sidebar-sessions {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    margin-bottom: 0;
+  }
+  #sessions-list {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+  }
+  #sessions-list::-webkit-scrollbar { width: 3px; }
+  #sessions-list::-webkit-scrollbar-track { background: transparent; }
+  #sessions-list::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+
+  .session-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.15s;
+    font-size: 13px;
+    color: #94a3b8;
+  }
+  .session-item:hover { background: #0f172a; }
+  .session-item.active { background: #172033; color: #e2e8f0; }
+  .session-title {
+    flex: 1;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 13px;
+  }
+  .session-del {
+    color: #334155;
+    cursor: pointer;
+    font-size: 16px;
+    flex-shrink: 0;
+    line-height: 1;
+    transition: color 0.15s;
+    visibility: hidden;
+  }
+  .session-item:hover .session-del { visibility: visible; }
+  .session-del:hover { color: #ef4444 !important; }
+  .sessions-empty {
+    font-size: 12px;
+    color: #475569;
+    padding: 8px 10px;
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Auth Overlay ─────────────────────────── -->
+<div id="auth-overlay">
+  <div class="auth-card">
+    <div class="logo">
+      <span>🔬</span>
+      <span>Element ML Intelligence Agent</span>
+    </div>
+    <p>Connect your Element ML session to get started. Your credentials are used only for this session and never stored on any server.</p>
+
+    <label>Walmart Associate ID</label>
+    <input type="text" id="auth-associate" placeholder="e.g. o0o01od">
+    <p class="auth-hint">Your Walmart login ID — used to identify your requests to the LLM Gateway</p>
+
+    <label>Bearer Token</label>
+    <input type="password" id="auth-token" placeholder="Paste your Bearer token from DevTools…">
+    <p class="auth-hint">DevTools → Network tab → any request to ml.prod.walmart.com → Authorization header</p>
+
+    <label>Cookie String</label>
+    <textarea id="auth-cookie" placeholder="Paste your full cookie string from DevTools…"></textarea>
+    <p class="auth-hint">DevTools → Network tab → same request → Cookie header → copy full value</p>
+
+    <button class="btn-connect" onclick="connect()">Connect →</button>
+  </div>
+</div>
+
+<!-- ── App ──────────────────────────────────── -->
+<div id="app">
+
+  <aside>
+    <div class="brand">
+      <div class="brand-icon">🔬</div>
+      <span class="brand-name">Element ML Agent</span>
+    </div>
+
+    <div class="status-badge" id="status-badge">
+      <span class="status-dot"></span>
+      Connected
+    </div>
+
+    <button class="btn-signout" onclick="signOut()" title="Clear session and re-enter credentials">↩ Sign Out / Re-login</button>
+
+    <div class="sidebar-section sidebar-sessions">
+      <h3>Chat History</h3>
+      <div id="sessions-list"><div class="sessions-empty">No history yet</div></div>
+    </div>
+  </aside>
+
+  <main>
+    <div class="chat-header">
+      <div class="chat-header-icon">🔬</div>
+      <div class="chat-header-text">
+        <h2>Element ML Intelligence Agent</h2>
+        <p>Powered by Walmart LLM Gateway · GPT-4o</p>
+      </div>
+      <button class="btn-reset" onclick="resetChat()">New chat</button>
+    </div>
+
+    <div id="messages"></div>
+
+    <!-- Notebook attachment chip (shown when .ipynb is attached) -->
+    <div id="nb-chip">
+      <span>📎</span>
+      <span class="chip-name" id="nb-chip-name">notebook.ipynb</span>
+      <span class="chip-meta" id="nb-chip-meta"></span>
+      <span class="chip-clear" onclick="clearNotebook()" title="Remove attachment">×</span>
+    </div>
+
+    <div class="input-bar">
+      <input type="file" id="nb-file" accept=".ipynb" style="display:none" onchange="handleNotebookFile(event)">
+      <button id="attach-btn" onclick="document.getElementById('nb-file').click()" title="Attach .ipynb notebook for pre-run review">📎</button>
+      <textarea id="user-input" rows="1"
+        placeholder="Ask about your jobs… (Enter to send, Shift+Enter for new line)"
+        onkeydown="handleKey(event)"
+        oninput="autoResize(this)"></textarea>
+      <button id="send-btn" onclick="sendMessage()" title="Send">↑</button>
+    </div>
+  </main>
+</div>
+
+<script>
+  // ── Auth / session state ──────────────────────────────────────────────────
+  let bearerToken      = sessionStorage.getItem('bearerToken')  || '';
+  let cookieString     = sessionStorage.getItem('cookieString') || '';
+  let associateId      = sessionStorage.getItem('associateId')  || '';
+  let sessions         = [];   // [{id, title, createdAt, messages}]
+  let currentSessionId = '';
+  let isWaiting        = false;
+  let attachedNotebook = null;
+
+  // ── Notebook follow-up detection ──────────────────────────────────────────
+  // Re-send stored notebook when user asks a follow-up that's clearly about
+  // the notebook (not about a job run). Mirrors server-side _is_review_intent.
+  const NOTEBOOK_RE = /\b(review|check|scan|audit|look at|analyse|analyze|before i run|pre.?run|any issues|catch issues|validate|inspect|optimi[sz]|performance|cell|notebook)\b/i;
+  const JOB_RE      = /\b(job|run|fail|workflow|project.?id|latest|last run|diagnos)\b/i;
+  function isNotebookFollowUp(text) {
+    return NOTEBOOK_RE.test(text) && !JOB_RE.test(text);
+  }
+
+  // ── Storage helpers ───────────────────────────────────────────────────────
+  function sessionsKey() { return 'chatSessions_' + associateId; }
+
+  function saveSessions() {
+    if (associateId) localStorage.setItem(sessionsKey(), JSON.stringify(sessions));
+  }
+
+  function loadSessions() {
+    try {
+      const raw = localStorage.getItem(sessionsKey());
+      if (raw) return JSON.parse(raw);
+
+      // Migration: wrap legacy single-thread history into first session
+      const legacy = localStorage.getItem('chatHistory_' + associateId);
+      if (legacy) {
+        const msgs = JSON.parse(legacy);
+        if (Array.isArray(msgs) && msgs.length > 0) {
+          const firstUser = msgs.find(m => m.role === 'user');
+          const t = firstUser ? firstUser.content : 'Previous session';
+          const migrated = [{
+            id: 'sess_migrated',
+            title: t.length > 50 ? t.slice(0, 50) + '…' : t,
+            createdAt: new Date().toISOString(),
+            messages: msgs
+          }];
+          localStorage.setItem(sessionsKey(), JSON.stringify(migrated));
+          localStorage.removeItem('chatHistory_' + associateId);
+          return migrated;
+        }
+      }
+    } catch {}
+    return [];
+  }
+
+  // ── Session management ────────────────────────────────────────────────────
+  function createNewSession() {
+    // Don't create another empty session if current one is already empty
+    const cur = sessions.find(s => s.id === currentSessionId);
+    if (cur && cur.messages.length === 0) {
+      loadSession(cur.id);
+      return;
+    }
+
+    const id = 'sess_' + Date.now();
+    sessions.unshift({ id, title: 'New chat', createdAt: new Date().toISOString(), messages: [], notebookJson: null });
+    currentSessionId = id;
+    saveSessions();
+    document.getElementById('messages').innerHTML = '';
+    showWelcome();
+    renderSessions();
+  }
+
+  function loadSession(id) {
+    const sess = sessions.find(s => s.id === id);
+    if (!sess) return;
+    currentSessionId = id;
+    document.getElementById('messages').innerHTML = '';
+    if (sess.messages.length === 0) {
+      showWelcome();
+    } else {
+      sess.messages.forEach(msg => appendMessage(msg.role, msg.content));
+    }
+    renderSessions();
+  }
+
+  function deleteSession(id, event) {
+    event.stopPropagation();
+    sessions = sessions.filter(s => s.id !== id);
+    saveSessions();
+    if (id === currentSessionId) {
+      if (sessions.length > 0) {
+        loadSession(sessions[0].id);
+      } else {
+        currentSessionId = '';
+        createNewSession();
+        return;
+      }
+    }
+    renderSessions();
+  }
+
+  function renderSessions() {
+    const list = document.getElementById('sessions-list');
+    list.innerHTML = '';
+    if (sessions.length === 0) {
+      list.innerHTML = '<div class="sessions-empty">No history yet</div>';
+      return;
+    }
+    sessions.forEach(sess => {
+      const item = document.createElement('div');
+      item.className = 'session-item' + (sess.id === currentSessionId ? ' active' : '');
+      item.onclick = () => loadSession(sess.id);
+
+      const title = document.createElement('span');
+      title.className = 'session-title';
+      title.textContent = sess.title;
+      title.title = sess.title;
+
+      const del = document.createElement('span');
+      del.className = 'session-del';
+      del.textContent = '×';
+      del.title = 'Delete this chat';
+      del.onclick = (e) => deleteSession(sess.id, e);
+
+      item.appendChild(title);
+      item.appendChild(del);
+      list.appendChild(item);
+    });
+  }
+
+  function initSessions(fresh = false) {
+    sessions = loadSessions();
+    if (fresh || sessions.length === 0) {
+      currentSessionId = '';   // clear so createNewSession guard doesn't skip
+      createNewSession();
+    } else {
+      currentSessionId = sessions[0].id;
+      loadSession(currentSessionId);
+    }
+  }
+
+  // ── Boot ──────────────────────────────────────────────────────────────────
+  window.onload = function () {
+    if (bearerToken && cookieString && associateId) {
+      document.getElementById('auth-overlay').classList.add('hidden');
+      initSessions();
+    }
+    document.getElementById('user-input').focus();
+  };
+
+  function connect() {
+    const assoc  = document.getElementById('auth-associate').value.trim();
+    const token  = document.getElementById('auth-token').value.trim();
+    const cookie = document.getElementById('auth-cookie').value.trim();
+    if (!assoc)  { alert('Please enter your Walmart Associate ID.'); return; }
+    if (!token)  { alert('Please paste your Bearer token.'); return; }
+    if (!cookie) { alert('Please paste your cookie string.'); return; }
+
+    associateId  = assoc;
+    bearerToken  = token.replace(/^Bearer\s+/i, '');
+    cookieString = cookie;
+    sessionStorage.setItem('associateId',  associateId);
+    sessionStorage.setItem('bearerToken',  bearerToken);
+    sessionStorage.setItem('cookieString', cookieString);
+
+    document.getElementById('auth-overlay').classList.add('hidden');
+    initSessions(true);   // always land on a fresh chat after login
+    document.getElementById('user-input').focus();
+  }
+
+  function showWelcome() {
+    appendMessage('assistant',
+      "Hi! I'm your Element ML Intelligence Agent 👋\n\n" +
+      "I can diagnose failed PySpark jobs, identify compute waste, analyze your job history, " +
+      "and review your notebook for PySpark issues before you run it.\n\n" +
+      "Just tell me what's going on. For example:\n" +
+      "• \"My job failed this morning\"\n" +
+      "• \"Am I over-provisioning workers?\"\n" +
+      "• \"Show me my recent failure history\"\n" +
+      "• 📎 Attach a .ipynb → \"Review this notebook before I run it\""
+    );
+  }
+
+  // ── Notebook attachment ───────────────────────────────────────────────────
+  function handleNotebookFile(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      try {
+        const parsed = JSON.parse(e.target.result);
+        if (!Array.isArray(parsed.cells)) {
+          alert('Invalid .ipynb file — no cells array found.');
+          return;
+        }
+        const stripped = parsed.cells
+          .filter(c => c.cell_type === 'code' || c.cell_type === 'markdown')
+          .map(c => ({
+            cell_type: c.cell_type,
+            source: Array.isArray(c.source) ? c.source.join('') : (c.source || '')
+          }));
+
+        const codeCells = stripped.filter(c => c.cell_type === 'code').length;
+        attachedNotebook = { cells: stripped };
+
+        // Persist in session so follow-up questions can re-use it
+        const activeSess = sessions.find(s => s.id === currentSessionId);
+        if (activeSess) { activeSess.notebookJson = attachedNotebook; saveSessions(); }
+
+        document.getElementById('nb-chip-name').textContent = file.name;
+        document.getElementById('nb-chip-meta').textContent = `${codeCells} code cells`;
+        document.getElementById('nb-chip').classList.add('visible');
+        document.getElementById('attach-btn').classList.add('active');
+        document.getElementById('user-input').focus();
+      } catch (err) {
+        alert('Could not parse .ipynb file: ' + err.message);
+      }
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+  }
+
+  function clearNotebook() {
+    attachedNotebook = null;
+    document.getElementById('nb-chip').classList.remove('visible');
+    document.getElementById('attach-btn').classList.remove('active');
+  }
+
+  // ── Send message ──────────────────────────────────────────────────────────
+  async function sendMessage() {
+    if (isWaiting) return;
+    const input = document.getElementById('user-input');
+    const text  = input.value.trim();
+    if (!text) return;
+
+    input.value = '';
+    input.style.height = 'auto';
+
+    // Use newly attached notebook, or fall back to session's stored notebook for follow-ups
+    let notebookSnapshot = attachedNotebook;
+    if (!notebookSnapshot) {
+      const activeSess = sessions.find(s => s.id === currentSessionId);
+      if (activeSess && activeSess.notebookJson && isNotebookFollowUp(text)) {
+        notebookSnapshot = activeSess.notebookJson;
+      }
+    }
+    const nbLabel = attachedNotebook
+      ? ` \n📎 ${document.getElementById('nb-chip-name').textContent}`
+      : '';
+
+    appendMessage('user', text + nbLabel);
+
+    // Update current session
+    const sess = sessions.find(s => s.id === currentSessionId);
+    if (sess) {
+      sess.messages.push({ role: 'user', content: text });
+      // Set title from first user message
+      if (sess.messages.length === 1) {
+        sess.title = text.length > 50 ? text.slice(0, 50) + '…' : text;
+        renderSessions();
+      }
+      saveSessions();
+    }
+    clearNotebook();
+
+    isWaiting = true;
+    document.getElementById('send-btn').disabled = true;
+    const typingId = showTyping();
+    const sendingSessionId = currentSessionId;
+
+    try {
+      const payload = {
+        message:       text,
+        history:       sess ? sess.messages.slice(0, -1) : [],
+        bearer_token:  bearerToken,
+        cookie_string: cookieString,
+        associate_id:  associateId,
+      };
+      if (notebookSnapshot) payload.notebook_json = notebookSnapshot;
+
+      const res = await fetch('/chat', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      removeTyping(typingId);
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
+        if (sess) sess.messages.push({ role: 'assistant', content: `⚠️ Error: ${err.detail || res.statusText}` });
+        if (sendingSessionId === currentSessionId)
+          appendMessage('assistant', `⚠️ Error: ${err.detail || res.statusText}`);
+      } else {
+        const data  = await res.json();
+        const reply = data.reply || '(no response)';
+        if (sess) sess.messages.push({ role: 'assistant', content: reply });
+        if (sendingSessionId === currentSessionId) appendMessage('assistant', reply);
+        saveSessions();
+      }
+    } catch (e) {
+      removeTyping(typingId);
+      if (sendingSessionId === currentSessionId)
+        appendMessage('assistant', `⚠️ Network error: ${e.message}`);
+    }
+
+    isWaiting = false;
+    document.getElementById('send-btn').disabled = false;
+    document.getElementById('user-input').focus();
+  }
+
+  // ── UI helpers ────────────────────────────────────────────────────────────
+  function appendMessage(role, text) {
+    const msgs = document.getElementById('messages');
+
+    const msg = document.createElement('div');
+    msg.className = `message ${role}`;
+
+    const avatar = document.createElement('div');
+    avatar.className = 'avatar';
+    avatar.textContent = role === 'assistant' ? '🔬' : '👤';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.innerHTML = formatText(text);
+
+    msg.appendChild(avatar);
+    msg.appendChild(bubble);
+    msgs.appendChild(msg);
+    msgs.scrollTop = msgs.scrollHeight;
+  }
+
+  function formatText(text) {
+    text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+    text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    text = text.replace(/\n/g, '<br>');
+    return text;
+  }
+
+  let typingCounter = 0;
+  function showTyping() {
+    const id = 'typing-' + (++typingCounter);
+    const msgs = document.getElementById('messages');
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'message assistant';
+    wrapper.id = id;
+
+    const avatar = document.createElement('div');
+    avatar.className = 'avatar';
+    avatar.textContent = '🔬';
+
+    const indicator = document.createElement('div');
+    indicator.className = 'typing-indicator';
+    for (let i = 0; i < 3; i++) {
+      const dot = document.createElement('div');
+      dot.className = 'typing-dot';
+      indicator.appendChild(dot);
+    }
+
+    wrapper.appendChild(avatar);
+    wrapper.appendChild(indicator);
+    msgs.appendChild(wrapper);
+    msgs.scrollTop = msgs.scrollHeight;
+    return id;
+  }
+
+  function removeTyping(id) {
+    const el = document.getElementById(id);
+    if (el) el.remove();
+  }
+
+  function handleKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  }
+
+  function autoResize(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+  }
+
+  function resetChat() {
+    createNewSession();
+  }
+
+  function signOut() {
+    sessionStorage.clear();
+    bearerToken      = '';
+    cookieString     = '';
+    associateId      = '';
+    sessions         = [];
+    currentSessionId = '';
+    document.getElementById('messages').innerHTML = '';
+    document.getElementById('sessions-list').innerHTML = '<div class="sessions-empty">No history yet</div>';
+    document.getElementById('auth-associate').value = '';
+    document.getElementById('auth-token').value     = '';
+    document.getElementById('auth-cookie').value    = '';
+    document.getElementById('auth-overlay').classList.remove('hidden');
+  }
+</script>
+</body>
+</html>
