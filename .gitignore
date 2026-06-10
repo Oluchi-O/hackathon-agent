@@ -1,6 +1,7 @@
 venv/
 .venv/
 __pycache__/
+.idea/
 *.pyc
 *.pyo
 *.pyd
@@ -12,3 +13,4 @@ __pycache__/
 poller_config.json
 alerts.json
 .poller_seen.json
+.DS_Store
