@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Element ML Intelligence Agent</title>
+<title>SparkNurse</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -439,6 +439,41 @@
     color: #475569;
     padding: 8px 10px;
   }
+
+  /* ── Job outcome toast ───────────────────────── */
+  .alert-toast {
+    position: fixed;
+    bottom: 24px; right: 24px;
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 16px;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    max-width: 360px;
+    z-index: 1000;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    animation: toastIn 0.3s ease;
+  }
+  .alert-toast.failure { border-left: 4px solid #ef4444; }
+  .alert-toast.success { border-left: 4px solid #22c55e; }
+  .alert-toast.warning { border-left: 4px solid #f59e0b; }
+  .toast-icon  { font-size: 20px; flex-shrink: 0; margin-top: 2px; }
+  .toast-body  { flex: 1; font-size: 13px; line-height: 1.6; color: #e2e8f0; }
+  .toast-body strong { display: block; font-size: 14px; margin-bottom: 2px; }
+  .toast-body .toast-sub { color: #94a3b8; font-size: 12px; }
+  .toast-body a { color: #58a6ff; font-size: 12px; text-decoration: none; }
+  .toast-body a:hover { text-decoration: underline; }
+  .toast-close {
+    cursor: pointer; color: #64748b; font-size: 20px;
+    line-height: 1; flex-shrink: 0; transition: color 0.15s;
+  }
+  .toast-close:hover { color: #e2e8f0; }
+  @keyframes toastIn {
+    from { transform: translateX(110%); opacity: 0; }
+    to   { transform: translateX(0);    opacity: 1; }
+  }
 </style>
 </head>
 <body>
@@ -447,8 +482,8 @@
 <div id="auth-overlay">
   <div class="auth-card">
     <div class="logo">
-      <span>🔬</span>
-      <span>Element ML Intelligence Agent</span>
+      <span>🩺</span>
+      <span>SparkNurse</span>
     </div>
     <p>Connect your Element ML session to get started. Your credentials are used only for this session and never stored on any server.</p>
 
@@ -473,8 +508,8 @@
 
   <aside>
     <div class="brand">
-      <div class="brand-icon">🔬</div>
-      <span class="brand-name">Element ML Agent</span>
+      <div class="brand-icon">🩺</div>
+      <span class="brand-name">SparkNurse</span>
     </div>
 
     <div class="status-badge" id="status-badge">
@@ -492,10 +527,9 @@
 
   <main>
     <div class="chat-header">
-      <div class="chat-header-icon">🔬</div>
+      <div class="chat-header-icon">🩺</div>
       <div class="chat-header-text">
-        <h2>Element ML Intelligence Agent</h2>
-        <p>Powered by Walmart LLM Gateway · GPT-4o</p>
+        <h2>SparkNurse</h2>
       </div>
       <button class="btn-reset" onclick="resetChat()">New chat</button>
     </div>
@@ -531,6 +565,73 @@
   let currentSessionId = '';
   let isWaiting        = false;
   let attachedNotebook = null;
+
+  // ── Job outcome toast (polls /alerts/data, notifies only on new entries) ──
+  let _lastKnownAlertTs  = null;   // null = baseline not yet set
+  let _alertPollInterval = null;
+
+  function startAlertPolling() {
+    if (_alertPollInterval) return;
+    checkForNewAlerts();                                  // set baseline immediately
+    _alertPollInterval = setInterval(checkForNewAlerts, 30000);
+    console.log('[alerts] Polling started — monitoring for job outcome');
+  }
+
+  function stopAlertPolling() {
+    if (_alertPollInterval) {
+      clearInterval(_alertPollInterval);
+      _alertPollInterval = null;
+      console.log('[alerts] Polling stopped — job outcome received');
+    }
+  }
+
+  async function checkForNewAlerts() {
+    try {
+      const res = await fetch('/alerts/data');
+      if (!res.ok) return;
+      const alerts = await res.json();
+      if (!Array.isArray(alerts) || alerts.length === 0) {
+        if (_lastKnownAlertTs === null) _lastKnownAlertTs = '';
+        return;
+      }
+      const latest = alerts[0];
+      const ts = latest.detectedAt || '';
+      if (_lastKnownAlertTs === null) {
+        _lastKnownAlertTs = ts;   // first check — just record baseline, no toast
+        return;
+      }
+      if (ts && ts !== _lastKnownAlertTs) {
+        _lastKnownAlertTs = ts;
+        showAlertToast(latest);
+        stopAlertPolling();   // outcome received — no need to keep polling
+      }
+    } catch(e) {}
+  }
+
+  function showAlertToast(alert) {
+    const status   = alert.status || '';
+    const isOk     = ['COMPLETED','SUCCESS','SUCCEEDED'].includes(status);
+    const isWarn   = ['TOKEN_EXPIRED','TRACKER_TIMEOUT'].includes(status);
+    const cls      = isOk ? 'success' : (isWarn ? 'warning' : 'failure');
+    const icon     = isOk ? '✅' : (isWarn ? '⚠️' : '🔴');
+    const title    = isOk ? 'Job Completed' : (isWarn ? 'Tracker Notice' : 'Job Failed');
+    const workflow = alert.workflow || 'Unknown workflow';
+    const sid      = alert.scheduleMetaId ? ` · sid=${alert.scheduleMetaId}` : '';
+
+    const toast = document.createElement('div');
+    toast.className = `alert-toast ${cls}`;
+    toast.innerHTML = `
+      <div class="toast-icon">${icon}</div>
+      <div class="toast-body">
+        <strong>${title}</strong>
+        <span class="toast-sub">${workflow}${sid}</span>
+        <a href="/alerts" target="_blank">View full details →</a>
+      </div>
+      <span class="toast-close" onclick="this.parentElement.remove()">×</span>
+    `;
+    document.body.appendChild(toast);
+    setTimeout(() => { if (toast.parentElement) toast.remove(); }, 30000);
+  }
 
   // ── Notebook follow-up detection ──────────────────────────────────────────
   // Re-send stored notebook when user asks a follow-up that's clearly about
@@ -693,7 +794,7 @@
 
   function showWelcome() {
     appendMessage('assistant',
-      "Hi! I'm your Element ML Intelligence Agent 👋\n\n" +
+      "Hi! I'm SparkNurse 🩺 — your Element ML job health assistant.\n\n" +
       "I can diagnose failed PySpark jobs, identify compute waste, analyze your job history, " +
       "and review your notebook for PySpark issues before you run it.\n\n" +
       "Just tell me what's going on. For example:\n" +
@@ -821,6 +922,11 @@
         if (sess) sess.messages.push({ role: 'assistant', content: reply });
         if (sendingSessionId === currentSessionId) appendMessage('assistant', reply);
         saveSessions();
+
+        // Start polling only if the agent just confirmed it's tracking a job
+        if (/monitoring it in the background|will be written to|alerts\.json/i.test(reply)) {
+          startAlertPolling();
+        }
       }
     } catch (e) {
       removeTyping(typingId);
@@ -842,7 +948,7 @@
 
     const avatar = document.createElement('div');
     avatar.className = 'avatar';
-    avatar.textContent = role === 'assistant' ? '🔬' : '👤';
+    avatar.textContent = role === 'assistant' ? '🩺' : '👤';
 
     const bubble = document.createElement('div');
     bubble.className = 'bubble';
@@ -873,7 +979,7 @@
 
     const avatar = document.createElement('div');
     avatar.className = 'avatar';
-    avatar.textContent = '🔬';
+    avatar.textContent = '🩺';
 
     const indicator = document.createElement('div');
     indicator.className = 'typing-indicator';

@@ -5,10 +5,13 @@ All endpoints confirmed via probe scripts against ml.prod.walmart.com.
 Auth: SSO Bearer token + session cookies (refresh from DevTools ~every 12h).
 """
 import json
+import logging
 import re
 import urllib3
 import requests
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 urllib3.disable_warnings()
 
@@ -30,20 +33,93 @@ class ElementMLClient:
 
     def get_job_history(self, project_id: int) -> list[dict]:
         """
-        Returns all schedule runs for a project.
-        KILLED runs are excluded (those are intentional user cancellations).
-        Confirmed working: returns 39 runs for project 16701.
+        Returns all schedule runs for a project by merging three API pools:
+          1. Default (no params)       → default sort pool
+          2. activeOnly=false          → historical/completed runs
+          3. activeOnly=true           → currently active/recent runs
+        Merging by scheduleMetaId gives the full date range across all pools.
+        KILLED runs are excluded (intentional user cancellations).
+        NOTE: no limit/offset — adding them changes the API sort order.
         """
-        r = requests.get(
-            f"{API_BASE}/v1/workflows/schedules?projectId={project_id}",
-            headers=self.headers,
-            cookies=self.cookies,
-            verify=False,
-            timeout=15,
+        def _fetch(extra_params: dict, label: str) -> list[dict]:
+            try:
+                r = requests.get(
+                    f"{API_BASE}/v1/workflows/schedules",
+                    params={"projectId": project_id, **extra_params},
+                    headers=self.headers,
+                    cookies=self.cookies,
+                    verify=False,
+                    timeout=20,
+                )
+                r.raise_for_status()
+                data = r.json()
+                if isinstance(data, list):
+                    runs = data
+                else:
+                    runs = (data.get("schedules") or data.get("data")
+                            or data.get("result") or [])
+                pool_dates = sorted(set(
+                    str(x.get("scheduleStartDate", ""))[:10]
+                    for x in runs if x.get("scheduleStartDate")
+                ))
+                print(
+                    f"[DEBUG pool:{label}] count={len(runs)} "
+                    f"range={pool_dates[0] if pool_dates else 'none'}"
+                    f"→{pool_dates[-1] if pool_dates else 'none'}",
+                    flush=True,
+                )
+                return runs
+            except Exception as e:
+                print(f"[DEBUG pool:{label}] FAILED: {e}", flush=True)
+                return []
+
+        # Pool 0: exact original code path (URL-string, no params dict)
+        try:
+            _r0 = requests.get(
+                f"{API_BASE}/v1/workflows/schedules?projectId={project_id}",
+                headers=self.headers,
+                cookies=self.cookies,
+                verify=False,
+                timeout=15,
+            )
+            _r0.raise_for_status()
+            _d0 = _r0.json()
+            pool_original = _d0 if isinstance(_d0, list) else []
+            _od = sorted(set(str(x.get("scheduleStartDate",""))[:10] for x in pool_original if x.get("scheduleStartDate")))
+            print(f"[DEBUG pool:original] count={len(pool_original)} range={_od[0] if _od else 'none'}→{_od[-1] if _od else 'none'}", flush=True)
+        except Exception as e:
+            print(f"[DEBUG pool:original] FAILED: {e}", flush=True)
+            pool_original = []
+
+        # Pool 1: default (no extra params via params dict)
+        pool_default = _fetch({}, "default")
+        # Pool 2: historical/completed (activeOnly=false)
+        pool_history = _fetch({"activeOnly": "false"}, "history")
+        # Pool 3: active/recent (activeOnly=true — may expose latest runs)
+        pool_active = _fetch({"activeOnly": "true"}, "active")
+
+        # Merge all, deduplicate by scheduleMetaId
+        seen: set = set()
+        merged: list[dict] = []
+        for run in pool_original + pool_default + pool_history + pool_active:
+            key = run.get("scheduleMetaId")
+            if key not in seen:
+                seen.add(key)
+                merged.append(run)
+
+        # Sort newest-first so jobs[:8] and failed[0] always give the most recent runs
+        merged.sort(key=lambda r: r.get("scheduleStartDate") or "", reverse=True)
+
+        dates = sorted(set(
+            str(r.get("scheduleStartDate", ""))[:10]
+            for r in merged if r.get("scheduleStartDate")
+        ))
+        print(
+            f"[DEBUG get_job_history] MERGED total={len(merged)} "
+            f"date_range={dates[0] if dates else 'none'}→{dates[-1] if dates else 'none'}",
+            flush=True,
         )
-        r.raise_for_status()
-        runs = r.json()
-        return [run for run in runs if run.get("scheduleStatus") != "KILLED"]
+        return [run for run in merged if run.get("scheduleStatus") != "KILLED"]
 
     # ── Workflow definition ──────────────────────────────────────────────────
 
@@ -144,11 +220,15 @@ class ElementMLClient:
              → recent dag runs with dag_run_id
           4. GET .../dagRuns/{run_id}/taskInstances
              → task list with task_id + try_number + state
-          5. GET .../taskInstances/{task_id}/logs/{try_number}
-             → plain-text log containing {"runId":XXXXXX} = spark_job_id
+          5a. GET .../taskInstances/{task_id}/logs/{try_number}   [Method 1 — fast]
+              → plain-text log containing {"runId":XXXXXX} = spark_job_id
+              LIMITATION: Airflow purges task logs after ~2-3 weeks; fails for old runs.
+          5b. GET .../taskInstances/{task_id}/xcomEntries          [Method 2 — fallback]
+              → DB-backed XCom rows survive log purging; searched for runId pattern.
+              Also tries named keys: return_value, spark_job_id, run_id, runId, application_id.
 
         batch_id is accepted for signature compatibility but not used in the chain —
-        the runId in task logs directly identifies the spark job.
+        the runId in task logs/XCom directly identifies the spark job.
         """
         from urllib.parse import quote
 
@@ -292,26 +372,74 @@ class ElementMLClient:
                 try_number = task.get("try_number", 1)
                 if not task_id:
                     continue
+                task_id_enc = quote(task_id, safe="")
 
+                # ── Method 1: Task log (fast path; fails when logs are purged) ─
                 try:
                     log_resp = requests.get(
                         f"{airflow_base}/dags/{workflow_dag_id}"
                         f"/dagRuns/{dag_run_id_enc}"
-                        f"/taskInstances/{task_id}/logs/{try_number}",
+                        f"/taskInstances/{task_id_enc}/logs/{try_number}",
                         headers={**self.headers, "Accept": "text/plain"},
                         cookies=self.cookies,
                         verify=False,
                         timeout=30,
                     )
+                    if log_resp.status_code == 200:
+                        match = re.search(r'"runId"\s*:\s*(\d+)', log_resp.text)
+                        if match:
+                            return int(match.group(1))
                 except Exception:
-                    continue
+                    pass
 
-                if log_resp.status_code != 200:
-                    continue
+                # ── Method 2: XCom entries (DB-backed; survives log purging) ──
+                # Airflow stores operator return values + explicit pushes in XCom.
+                # XCom rows live in the Airflow DB (not log files) and are purged
+                # far less aggressively — typically never, or only with full DAG cleanup.
+                try:
+                    xcom_resp = requests.get(
+                        f"{airflow_base}/dags/{workflow_dag_id}"
+                        f"/dagRuns/{dag_run_id_enc}"
+                        f"/taskInstances/{task_id_enc}/xcomEntries",
+                        headers=self.headers,
+                        cookies=self.cookies,
+                        verify=False,
+                        timeout=15,
+                    )
+                    if xcom_resp.status_code == 200:
+                        for entry in xcom_resp.json().get("xcom_entries", []):
+                            val_str = str(entry.get("value", ""))
+                            m = re.search(r'"?runId"?\s*[":]+\s*(\d{7,9})', val_str)
+                            if m:
+                                return int(m.group(1))
+                            if re.fullmatch(r'\d{7,9}', val_str.strip()):
+                                return int(val_str.strip())
+                except Exception:
+                    pass
 
-                match = re.search(r'"runId"\s*:\s*(\d+)', log_resp.text)
-                if match:
-                    return int(match.group(1))
+                # XCom by named key — try common names the platform may use
+                for xcom_key in ("return_value", "spark_job_id", "run_id",
+                                 "runId", "application_id"):
+                    try:
+                        kv = requests.get(
+                            f"{airflow_base}/dags/{workflow_dag_id}"
+                            f"/dagRuns/{dag_run_id_enc}"
+                            f"/taskInstances/{task_id_enc}/xcomEntries/{xcom_key}",
+                            headers=self.headers,
+                            cookies=self.cookies,
+                            verify=False,
+                            timeout=15,
+                        )
+                        if kv.status_code == 200:
+                            val_str = kv.text
+                            m = re.search(r'"?runId"?\s*[":]+\s*(\d{7,9})', val_str)
+                            if m:
+                                return int(m.group(1))
+                            m = re.search(r'\b(\d{7,9})\b', val_str)
+                            if m:
+                                return int(m.group(1))
+                    except Exception:
+                        continue
 
         return None
 

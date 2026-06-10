@@ -147,12 +147,27 @@ def extract_failing_cells(html: str) -> list[dict]:
             seg = html[seg_start:seg_end]
             exec_num = int(m.group(1))
 
-            # Source: first meaningful <pre> in this segment
-            src_m = re.search(r'<pre>(.*?)</pre>', seg, re.DOTALL)
-            if not src_m:
-                continue
-            source = _clean_html(src_m.group(1))[:600]
-            if len(source) < 10 or source.startswith('.') or 'color:' in source[:50]:
+            # Source: first code <pre> in this segment — skip error-output pres
+            # (e.g. "An error was encountered:", "Traceback", ANSI-stripped tracebacks)
+            _ERROR_STARTS = (
+                'An error was encountered',
+                'Traceback (most recent',
+                '-----------',
+                'Error:',
+                'Exception:',
+                'WARNING:',
+            )
+            source = None
+            for src_m in re.finditer(r'<pre>(.*?)</pre>', seg, re.DOTALL):
+                candidate = _clean_html(src_m.group(1))[:600]
+                if (len(candidate) < 10
+                        or candidate.startswith('.')
+                        or 'color:' in candidate[:50]
+                        or any(candidate.startswith(p) for p in _ERROR_STARTS)):
+                    continue
+                source = candidate
+                break
+            if not source:
                 continue
 
             # Errors in this segment

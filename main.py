@@ -15,6 +15,8 @@ Auth:
   Cookie string optional — required for some platform endpoints.
 """
 import json
+import os
+import threading
 from typing import Optional
 
 from fastapi import FastAPI, Header, HTTPException, Query
@@ -23,8 +25,35 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from agent import diagnose_failure
-from chat_agent import chat_turn
+from chat_agent import chat_turn, _extract_ids, _is_track_intent
 from data_layer import ElementMLClient
+from failure_poller import track_job_until_terminal
+
+# ── Job-tracking dedup (prevents duplicate threads for the same scheduleMetaId)
+_TRACKING: set[int] = set()
+_tracking_lock = threading.Lock()
+
+
+def _run_tracker(
+    schedule_meta_id: int,
+    project_id: int,
+    bearer: str,
+    cookie_string: str,
+    associate_id: str,
+) -> None:
+    """Thread target: track one job until terminal, then remove from _TRACKING."""
+    cookies: dict = {}
+    for part in cookie_string.split(";"):
+        if "=" in part:
+            k, v = part.strip().split("=", 1)
+            cookies[k.strip()] = v.strip()
+    try:
+        track_job_until_terminal(schedule_meta_id, project_id, bearer, cookies, associate_id)
+    except Exception as e:
+        print(f"[TRACKER] Unexpected error for sid={schedule_meta_id}: {e}", flush=True)
+    finally:
+        with _tracking_lock:
+            _TRACKING.discard(schedule_meta_id)
 
 app = FastAPI(
     title="Element ML Compute Intelligence Agent",
@@ -219,8 +248,14 @@ def chat(request: ChatRequest):
     Accepts a plain-English message + conversation history.
     Automatically fetches live job data when a project_id is mentioned,
     then returns an AI-generated response.
+
+    When the user says they just submitted a job, a background tracker thread
+    polls until the job reaches a terminal state and writes the outcome
+    (success confirmation or full failure diagnosis) to alerts.json.
     """
     try:
+        track = _is_track_intent(request.message, request.history)
+
         reply = chat_turn(
             message=request.message,
             history=request.history,
@@ -228,7 +263,56 @@ def chat(request: ChatRequest):
             cookie_string=request.cookie_string,
             associate_id=request.associate_id,
             notebook_json=request.notebook_json,
+            track_intent=track,
         )
+
+        # User-initiated job tracking
+        if track and request.bearer_token:
+            full_text = " ".join(
+                m.get("content", "") for m in request.history
+            ) + " " + request.message
+            ids = _extract_ids(full_text)
+            project_id = ids.get("project_id")
+
+            if project_id:
+                _TERMINAL = {"FAILED", "KILLED", "COMPLETED", "SUCCESS", "SUCCEEDED"}
+                cookies = _cookies_from_header(request.cookie_string)
+                client = ElementMLClient(request.bearer_token, cookies)
+                try:
+                    jobs = client.get_job_history(project_id)
+                    active = [j for j in jobs if j.get("scheduleStatus") not in _TERMINAL]
+                    if active:
+                        sid = active[0].get("scheduleMetaId")
+                        if sid:
+                            with _tracking_lock:
+                                already = sid in _TRACKING
+                                if not already:
+                                    _TRACKING.add(sid)
+                            if not already:
+                                threading.Thread(
+                                    target=_run_tracker,
+                                    args=(
+                                        sid,
+                                        project_id,
+                                        request.bearer_token,
+                                        request.cookie_string,
+                                        request.associate_id,
+                                    ),
+                                    daemon=True,
+                                ).start()
+                                print(
+                                    f"[CHAT] 🟡 Tracker started — "
+                                    f"scheduleMetaId={sid}, project={project_id}",
+                                    flush=True,
+                                )
+                            else:
+                                print(
+                                    f"[CHAT] Already tracking scheduleMetaId={sid}",
+                                    flush=True,
+                                )
+                except Exception as e:
+                    print(f"[CHAT] Could not start tracker: {e}", flush=True)
+
         return {"reply": reply}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -261,6 +345,111 @@ def probe_airflow_log(
         return client.get_airflow_task_log_full(workflow_dag_id, run_index, max_chars)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Proactive failure alerts dashboard ───────────────────────────────────────
+
+@app.get("/alerts", tags=["Poller"], response_class=HTMLResponse, include_in_schema=False)
+def alerts_dashboard():
+    """Live dashboard of auto-detected failures from failure_poller.py."""
+    alerts_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "alerts.json")
+    alerts = []
+    if os.path.exists(alerts_path):
+        with open(alerts_path) as f:
+            alerts = json.load(f)
+
+    rows = ""
+    for a in alerts:
+        diag = (a.get("aiDiagnosis") or "—").replace("<", "&lt;").replace(">", "&gt;")
+        src  = (a.get("sourceCode") or "—").replace("<", "&lt;").replace(">", "&gt;")
+        status_val = a.get('status') or ('FAILED' if a.get('failedAt') else '—')
+        status_color = '#4ade80' if status_val in ('COMPLETED','SUCCESS','SUCCEEDED') else ('#ef4444' if status_val in ('FAILED','KILLED') else '#f59e0b')
+        rows += f"""
+        <tr>
+          <td>{a.get('detectedAt', '')[:19].replace('T', ' ')}</td>
+          <td>{a.get('projectId', '—')}</td>
+          <td>{a.get('workflow', '—')}</td>
+          <td>{a.get('scheduleMetaId', '—')}</td>
+          <td><span style="color:{status_color};font-weight:600">{status_val}</span></td>
+          <td>{a.get('errorType', '—')}</td>
+          <td>Cell {a.get('cellNum', '—')}</td>
+          <td><code>{src[:120]}{'…' if len(src) > 120 else ''}</code></td>
+          <td class="diag">{diag}</td>
+        </tr>"""
+
+    count = len(alerts)
+    latest_ts = alerts[0].get('detectedAt', '') if alerts else ''
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Element ML — Failure Alerts</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+           background: #0d1117; color: #e6edf3; margin: 0; padding: 24px; }}
+    h1   {{ color: #f0883e; margin-bottom: 4px; }}
+    .meta {{ color: #8b949e; font-size: 13px; margin-bottom: 20px; }}
+    .badge {{ background: #da3633; color: #fff; padding: 2px 8px;
+              border-radius: 12px; font-size: 12px; margin-left: 8px; }}
+    .live  {{ color: #4ade80; font-size: 12px; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+    th    {{ background: #161b22; color: #8b949e; text-align: left;
+             padding: 8px 12px; border-bottom: 1px solid #30363d; }}
+    td    {{ padding: 8px 12px; border-bottom: 1px solid #21262d; vertical-align: top; }}
+    tr:hover td {{ background: #161b22; }}
+    code  {{ background: #161b22; padding: 2px 6px; border-radius: 4px;
+             font-family: 'SF Mono', Consolas, monospace; font-size: 12px; }}
+    .diag {{ max-width: 380px; white-space: pre-wrap; font-size: 12px; color: #cdd9e5; }}
+    .empty {{ text-align: center; padding: 60px; color: #8b949e; }}
+  </style>
+</head>
+<body>
+  <h1>🔴 Element ML — Proactive Failure Alerts
+    {'<span class="badge">' + str(count) + ' alert' + ('s' if count != 1 else '') + '</span>' if count else ''}
+  </h1>
+  <div class="meta">
+    <span class="live" id="live-status">● Live</span> &nbsp;·&nbsp;
+    <a href="/alerts/data" style="color:#58a6ff">Raw JSON</a> &nbsp;·&nbsp;
+    Updates automatically when new alerts arrive
+  </div>
+  {'<table><thead><tr>'
+    '<th>Detected At (UTC)</th><th>Project</th><th>Workflow</th>'
+    '<th>scheduleMetaId</th><th>Status</th><th>Error Type</th>'
+    '<th>Cell</th><th>Source</th><th>AI Diagnosis</th>'
+    '</tr></thead><tbody>' + rows + '</tbody></table>'
+    if count else '<div class="empty" id="empty-msg">✅ No alerts yet — tracker will update this page when a monitored job finishes.</div>'}
+<script>
+  var _knownCount = {count};
+  var _knownTs    = '{latest_ts}';
+
+  async function poll() {{
+    try {{
+      var r = await fetch('/alerts/data');
+      if (!r.ok) return;
+      var data = await r.json();
+      var count = data.length;
+      var ts    = count > 0 ? (data[0].detectedAt || '') : '';
+      if (count !== _knownCount || ts !== _knownTs) {{
+        location.reload();
+      }}
+    }} catch(e) {{}}
+  }}
+
+  setInterval(poll, 15000);
+</script>
+</body>
+</html>"""
+    return html
+
+
+@app.get("/alerts/data", tags=["Poller"])
+def alerts_data():
+    """Raw JSON of all auto-detected failure alerts."""
+    alerts_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "alerts.json")
+    if not os.path.exists(alerts_path):
+        return []
+    with open(alerts_path) as f:
+        return json.load(f)
 
 
 # ── Dev server ────────────────────────────────────────────────────────────────

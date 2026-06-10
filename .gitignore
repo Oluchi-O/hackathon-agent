@@ -9,3 +9,6 @@ __pycache__/
 .env.example
 *.txt
 !requirements.txt
+poller_config.json
+alerts.json
+.poller_seen.json
