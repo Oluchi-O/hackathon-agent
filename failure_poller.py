@@ -138,7 +138,7 @@ def diagnose_run(run: dict, project_id: int, client: ElementMLClient,
     if has_errors:
         try:
             prompt = _DIAG_PROMPT.format(job_data=raw_diagnosis[:3000])
-            ai_diagnosis = call_elementai(prompt, bearer, associate_id, max_tokens=512)
+            ai_diagnosis = call_elementai(prompt, bearer, associate_id, max_tokens=2048)
         except Exception as e:
             ai_diagnosis = f"[LLM call failed: {e}]"
     else:
