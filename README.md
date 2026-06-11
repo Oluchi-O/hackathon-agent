@@ -2,6 +2,14 @@
 
 > A conversational AI assistant that integrates with the Element ML workflow to eliminate the job failure loop — diagnosing failures before engineers waste hours hunting logs, catching code issues before they cost compute, and tracking ongoing jobs in the background.
 
+**Description:** A conversational AI assistant that integrates with the Element ML workflow to eliminate the job failure loop — diagnosing PySpark job failures before engineers waste hours hunting logs, catching code issues before they cost compute, and tracking ongoing jobs in the background.
+**Team:** o0o01od, j0w0vpy
+**Platform area:** WCNP
+**Category:** conversational agent
+**Track:** Track 04
+**Project repo:** https://gecgithub01.walmart.com/o0o01od/sparknurse
+**Demo video:** https://urldefense.com/v3/__https://walmart.zoom.us/rec/share/E2t1xgEwe431NKcDwy6dMylgbeCQXuUj6DcjD4XoECRv5eTWGevDHtaVQBl8zik_.jmSiYPzslptZxWE3__;!!IfjTnhH9!VeKe84_NtR3mRy0T0IuijrGeaQycNAodt11fNCtehRMd_VluJaBF_e8nHoxuND3_qbGGQz4KO6mswZoULtpQ5T8$
+
 ---
 
 ## The Problem
